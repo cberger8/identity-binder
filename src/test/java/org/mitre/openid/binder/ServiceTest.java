@@ -11,8 +11,11 @@ import org.mitre.openid.connect.binder.model.MultipleIdentity;
 import org.mitre.openid.connect.binder.model.SingleIdentity;
 import org.mitre.openid.connect.binder.repository.MultipleIdentityRepository;
 import org.mitre.openid.connect.binder.repository.SingleIdentityRepository;
+import org.mitre.openid.connect.binder.service.ConsistencyService;
+import org.mitre.openid.connect.binder.service.ConsistencyServiceDefault;
 import org.mitre.openid.connect.binder.service.IdentityService;
 import org.mitre.openid.connect.binder.service.IdentityServiceDefault;
+import org.mitre.openid.connect.model.OIDCAuthenticationToken;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -20,7 +23,6 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.runners.MockitoJUnitRunner;
 import org.mockito.stubbing.Answer;
 import org.springframework.boot.test.SpringApplicationConfiguration;
-
 import com.google.common.collect.Sets;
 
 @RunWith(MockitoJUnitRunner.class)
@@ -34,7 +36,20 @@ public class ServiceTest {
 	MultipleIdentityRepository multipleIdentityRepository;
 	
 	@InjectMocks
-	IdentityService service = new IdentityServiceDefault();
+	IdentityService idService = new IdentityServiceDefault();
+	
+	@Mock
+	OIDCAuthenticationToken token1;
+	@Mock
+	OIDCAuthenticationToken token2;
+	@Mock
+	OIDCAuthenticationToken token3;
+	
+	@Mock
+	IdentityService idService2;
+	
+	@InjectMocks
+	ConsistencyService consService = new ConsistencyServiceDefault();
 	
 	// test data
 	SingleIdentity identity1;
@@ -78,12 +93,31 @@ public class ServiceTest {
 		      return (MultipleIdentity) args[0];
 		    }
 		  });
+		
+		Mockito.when(token1.getSub()).thenReturn("user1");
+		Mockito.when(token1.getIssuer()).thenReturn("www.example.com");
+		Mockito.when(token2.getSub()).thenReturn("user2");
+		Mockito.when(token2.getIssuer()).thenReturn("www.example.com");
+		Mockito.when(token3.getSub()).thenReturn("user3");
+		Mockito.when(token3.getIssuer()).thenReturn("www.somewhereelse.com");
+		
+		Mockito.when(idService2.getMultipleBySubjectIssuer("user1", "www.example.com")).thenReturn(multi1);
+		Mockito.when(idService2.getMultipleBySubjectIssuer("user2", "www.example.com")).thenReturn(multi1);
+		Mockito.when(idService2.convertTokenIdentity(token1)).thenReturn(identity1);
+		Mockito.when(idService2.convertTokenIdentity(token2)).thenReturn(identity2);
+		Mockito.when(idService2.saveMultipleIdentity(Mockito.any(MultipleIdentity.class))).thenAnswer(new Answer<MultipleIdentity>() {
+		    @Override
+		    public MultipleIdentity answer(InvocationOnMock invocation) throws Throwable {
+		      Object[] args = invocation.getArguments();
+		      return (MultipleIdentity) args[0];
+		    }
+		  });
 	}
 	
 	@Test
 	public void testGetSingle() {
 		
-		assertThat(service.getSingleBySubjectIssuer("user1", "www.example.com"), equalTo(identity1));
+		assertThat(idService.getSingleBySubjectIssuer("user1", "www.example.com"), equalTo(identity1));
 		
 	}
 	
@@ -94,11 +128,24 @@ public class ServiceTest {
 		Mockito.when(multipleIdentityRepository.findAll()).thenReturn(Sets.newHashSet(multi1, multi2));
 		
 		// success case
-		assertThat(service.getMultipleBySubjectIssuer("user1", "www.example.com"), equalTo(multi1));
-		assertThat(service.getMultipleBySubjectIssuer("user2", "www.example.com"), equalTo(multi1));
+		assertThat(idService.getMultipleBySubjectIssuer("user1", "www.example.com"), equalTo(multi1));
+		assertThat(idService.getMultipleBySubjectIssuer("user2", "www.example.com"), equalTo(multi1));
 		
 		// failure case
-		assertThat(service.getMultipleBySubjectIssuer("mr. shouldn't exist", "www.somewhereelse.net"), nullValue());
+		assertThat(idService.getMultipleBySubjectIssuer("mr. shouldn't exist", "www.somewhereelse.net"), nullValue());
+	}
+	
+	@Test
+	public void testConsistency() {
+		
+		// single token consistency
+		assertThat(consService.isConsistent(Sets.newHashSet(token1)), equalTo(true));
+		
+		// multi (bound) token consistency
+		assertThat(consService.isConsistent(Sets.newHashSet(token1, token2)), equalTo(true));
+		
+		// multi (unbound) token consistency (failure case)
+		assertThat(consService.isConsistent(Sets.newHashSet(token1, token3)), equalTo(false));
 	}
 	
 	@Test
@@ -106,7 +153,7 @@ public class ServiceTest {
 		
 		assertThat(multi1.getIdentities(), hasItems(identity1, identity2));
 		
-		service.unbindBySubjectIssuer(multi1, "user1", "www.example.com");
+		idService.unbindBySubjectIssuer(multi1, "user1", "www.example.com");
 		
 		assertThat(multi1.getIdentities(), not(hasItem(identity1)));
 	}
